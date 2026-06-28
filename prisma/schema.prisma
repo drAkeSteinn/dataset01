@@ -1,0 +1,46 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Dataset {
+  id              String   @id @default(cuid())
+  name            String
+  description     String   @default("")
+  triggerWord     String   @default("")
+  captionStyle    String   @default("natural")
+  captionTemplate String   @default("")
+  imagePath       String
+  llmProvider     String   @default("zai")
+  llmModel        String   @default("")
+  llmEndpoint     String   @default("")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  images          Image[]
+}
+
+model Image {
+  id               String   @id @default(cuid())
+  datasetId        String
+  filename         String
+  originalPath     String
+  caption          String   @default("")
+  vlmAnalysis      String   @default("")
+  colorInfo        String   @default("")
+  imageDescription String   @default("")
+  status           String   @default("pending")
+  errorMessage     String   @default("")
+  width            Int      @default(0)
+  height           Int      @default(0)
+  fileSize         Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  dataset          Dataset  @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+
+  @@index([datasetId])
+  @@index([status])
+}

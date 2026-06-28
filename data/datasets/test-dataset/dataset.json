@@ -1,0 +1,12 @@
+{
+  "name": "Test Dataset",
+  "description": "Anime artwork dataset featuring characters in various poses and settings. Focus on describing hair color, eye color, clothing, accessories, and background environment.",
+  "triggerWord": "n1pl3fk",
+  "captionStyle": "natural",
+  "captionTemplate": "",
+  "llmProvider": "zai",
+  "llmModel": "",
+  "llmEndpoint": "",
+  "createdAt": "2026-06-27T12:05:02.809Z",
+  "updatedAt": "2026-06-28T00:14:09.947Z"
+}
