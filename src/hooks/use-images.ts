@@ -26,14 +26,17 @@ async function updateCaption({
   imageId,
   caption,
   imageDescription,
+  triggerWordOverride,
 }: {
   imageId: string;
   caption?: string;
   imageDescription?: string;
+  triggerWordOverride?: string;
 }): Promise<DatasetImage> {
   const body: Record<string, string> = {};
   if (typeof caption === 'string') body.caption = caption;
   if (typeof imageDescription === 'string') body.imageDescription = imageDescription;
+  if (typeof triggerWordOverride === 'string') body.triggerWordOverride = triggerWordOverride;
 
   const res = await fetch(`/api/images/${imageId}`, {
     method: 'PUT',
@@ -76,7 +79,7 @@ async function deleteImage(imageId: string): Promise<void> {
 async function fetchTags(
   datasetId: string,
   search?: string
-): Promise<{ type: string; tags?: Array<{ tag: string; count: number }>; results?: Array<{ filename: string; caption: string }>; totalUniqueTags?: number; count?: number }> {
+): Promise<{ type: string; tags?: Array<{ tag: string; count: number }>; results?: Array<{ filename: string; caption: string }>; totalUniqueTags?: number; totalCaptionFiles?: number; count?: number }> {
   const params = new URLSearchParams();
   if (search) params.set('search', search);
   const res = await fetch(`/api/datasets/${datasetId}/tags?${params}`);
@@ -104,6 +107,36 @@ async function manageTags({
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || 'Failed to manage tags');
   }
+  return res.json();
+}
+
+async function renameTag({
+  datasetId,
+  oldTag,
+  newTag,
+}: {
+  datasetId: string;
+  oldTag: string;
+  newTag: string;
+}): Promise<{ success: boolean; modified: number; message: string }> {
+  const res = await fetch(`/api/datasets/${datasetId}/tags`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ oldTag, newTag }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to rename tag');
+  }
+  return res.json();
+}
+
+async function previewTag(
+  datasetId: string,
+  tag: string
+): Promise<{ type: string; tag: string; totalCaptionFiles: number; alreadyHave: number; wouldAddTo: number }> {
+  const res = await fetch(`/api/datasets/${datasetId}/tags?preview=${encodeURIComponent(tag)}`);
+  if (!res.ok) throw new Error('Failed to preview tag');
   return res.json();
 }
 
@@ -276,5 +309,95 @@ export function useManageTags() {
     onError: (error: Error) => {
       toast.error(error.message);
     },
+  });
+}
+
+export function useRenameTag() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: renameTag,
+    onSuccess: (data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['tags', variables.datasetId] });
+      queryClient.invalidateQueries({ queryKey: ['images'] });
+      queryClient.invalidateQueries({ queryKey: ['dataset'] });
+      toast.success(data.message);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
+}
+
+export function usePreviewTag(datasetId: string | null, tag: string | null) {
+  return useQuery({
+    queryKey: ['tags-preview', datasetId, tag],
+    queryFn: () => previewTag(datasetId!, tag!),
+    enabled: !!datasetId && !!tag && tag.trim().length > 0,
+  });
+}
+
+async function replaceInCaptions({
+  datasetId,
+  find,
+  replace,
+  matchCase,
+  wholeWord,
+}: {
+  datasetId: string;
+  find: string;
+  replace: string;
+  matchCase?: boolean;
+  wholeWord?: boolean;
+}): Promise<{ success: boolean; modified: number; message: string }> {
+  const res = await fetch(`/api/datasets/${datasetId}/tags`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ find, replace, matchCase, wholeWord }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to replace text');
+  }
+  return res.json();
+}
+
+async function previewReplace(
+  datasetId: string,
+  find: string,
+  options: { matchCase?: boolean; wholeWord?: boolean }
+): Promise<{ type: string; totalCaptionFiles: number; matchingFiles: number }> {
+  const params = new URLSearchParams({ replaceFind: find });
+  if (options.matchCase) params.set('matchCase', '1');
+  if (options.wholeWord) params.set('wholeWord', '1');
+  const res = await fetch(`/api/datasets/${datasetId}/tags?${params}`);
+  if (!res.ok) throw new Error('Failed to preview replace');
+  return res.json();
+}
+
+export function useReplaceInCaptions() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: replaceInCaptions,
+    onSuccess: (data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['tags', variables.datasetId] });
+      queryClient.invalidateQueries({ queryKey: ['images'] });
+      queryClient.invalidateQueries({ queryKey: ['dataset'] });
+      toast.success(data.message);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
+}
+
+export function usePreviewReplace(
+  datasetId: string | null,
+  find: string | null,
+  options: { matchCase?: boolean; wholeWord?: boolean }
+) {
+  return useQuery({
+    queryKey: ['replace-preview', datasetId, find, options.matchCase, options.wholeWord],
+    queryFn: () => previewReplace(datasetId!, find!, options),
+    enabled: !!datasetId && !!find && find.length > 0,
   });
 }

@@ -9,6 +9,9 @@ import {
   FolderOpen,
   RotateCcw,
   Play,
+  BarChart3,
+  Pause,
+  Copy,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
@@ -21,9 +24,12 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { useAppStore } from '@/stores/app-store';
-import { useDataset } from '@/hooks/use-datasets';
+import { useDataset, useProviderHealth } from '@/hooks/use-datasets';
 import { useImportFromFolder, useDatasetImages } from '@/hooks/use-images';
+import { DatasetStatsDialog } from '@/components/dataset-stats-dialog';
+import { DuplicatesDialog } from '@/components/duplicates-dialog';
 import { useBatchOperation } from '@/hooks/use-batch-operation';
+import { cn } from '@/lib/utils';
 
 export function BatchOperationsBar() {
   const { activeDatasetId } = useAppStore();
@@ -34,6 +40,8 @@ export function BatchOperationsBar() {
 
   // Track regeneration pending count for resume capability
   const [regenPendingCount, setRegenPendingCount] = useState(0);
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [duplicatesOpen, setDuplicatesOpen] = useState(false);
 
   useEffect(() => {
     if (!activeDatasetId || batchOperation.isRunning) return;
@@ -91,6 +99,15 @@ export function BatchOperationsBar() {
     }
   };
 
+  const handleRetryFailed = async () => {
+    if (!activeDatasetId) return;
+    try {
+      await startOperation(activeDatasetId, 'regenerate', { retryFailed: true } as { retryFailed: true });
+    } catch (err) {
+      console.error('Retry failed:', err);
+    }
+  };
+
   const handleDownload = async () => {
     if (!activeDatasetId) return;
     try {
@@ -130,10 +147,18 @@ export function BatchOperationsBar() {
       ? (batchOperation.progress.processed / batchOperation.progress.total) * 100
       : 0;
 
-  const providerLabel = dataset?.llmProvider === 'zai' ? '' : 
+  const providerLabel = dataset?.llmProvider === 'zai' ? '' :
     dataset?.llmProvider === 'ollama' ? 'Ollama' :
     dataset?.llmProvider === 'lmstudio' ? 'LM Studio' :
     dataset?.llmProvider === 'textgen' ? 'TextGen' : '';
+
+  // Provider health indicator (green/red dot)
+  const health = useProviderHealth(
+    activeDatasetId,
+    dataset?.llmProvider,
+    dataset?.llmEndpoint,
+    dataset?.llmModel
+  );
 
   return (
     <div className="border-b bg-background">
@@ -147,13 +172,62 @@ export function BatchOperationsBar() {
                 {dataset.imageCount} images
               </Badge>
               {providerLabel && (
-                <Badge variant="outline" className="shrink-0 text-[9px] text-muted-foreground">
-                  {providerLabel}{dataset.llmModel ? ` · ${dataset.llmModel}` : ''}
-                </Badge>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="outline" className="shrink-0 text-[9px] text-muted-foreground gap-1 cursor-help">
+                      <span
+                        className={cn(
+                          'inline-block h-1.5 w-1.5 rounded-full',
+                          health.isLoading
+                            ? 'bg-muted-foreground/40'
+                            : health.data?.success
+                            ? 'bg-emerald-500'
+                            : 'bg-red-500'
+                        )}
+                      />
+                      {providerLabel}{dataset.llmModel ? ` · ${dataset.llmModel}` : ''}
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="text-xs max-w-[280px]">
+                    {health.isLoading
+                      ? 'Checking provider…'
+                      : health.data?.success
+                      ? `Provider reachable: ${health.data.message}`
+                      : `Provider unreachable: ${health.data?.message || 'unknown error'}`}
+                  </TooltipContent>
+                </Tooltip>
               )}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    onClick={() => setStatsOpen(true)}
+                    title="Estadísticas del dataset"
+                  >
+                    <BarChart3 className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Ver estadísticas del dataset</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    onClick={() => setDuplicatesOpen(true)}
+                    title="Buscar duplicados"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Buscar imágenes duplicadas y similares</TooltipContent>
+              </Tooltip>
             </>
           ) : (
-            <h1 className="text-sm text-muted-foreground">No dataset selected</h1>
+            <h1 className="text-sm text-muted-foreground">Ningún dataset seleccionado</h1>
           )}
         </div>
 
@@ -176,7 +250,7 @@ export function BatchOperationsBar() {
                   ) : (
                     <ScanSearch className="h-3.5 w-3.5" />
                   )}
-                  Analyze
+                  Analizar
                   {dataset?.stats?.pending ? (
                     <Badge variant="secondary" className="ml-1 h-4 px-1 text-[9px]">
                       {dataset.stats.pending}
@@ -184,7 +258,7 @@ export function BatchOperationsBar() {
                   ) : null}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Analyze images with VLM to extract character descriptions</TooltipContent>
+              <TooltipContent>Analizar imágenes con VLM para extraer descripciones de personajes</TooltipContent>
             </Tooltip>
 
             <Tooltip>
@@ -201,7 +275,7 @@ export function BatchOperationsBar() {
                   ) : (
                     <MessageSquareText className="h-3.5 w-3.5" />
                   )}
-                  Generate
+                  Generar
                   {dataset?.stats?.analyzed ? (
                     <Badge variant="secondary" className="ml-1 h-4 px-1 text-[9px]">
                       {dataset.stats.analyzed}
@@ -209,7 +283,7 @@ export function BatchOperationsBar() {
                   ) : null}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Generate LoRA captions for analyzed images</TooltipContent>
+              <TooltipContent>Generar captions LoRA para imágenes analizadas</TooltipContent>
             </Tooltip>
 
             <Tooltip>
@@ -233,9 +307,9 @@ export function BatchOperationsBar() {
                   )}
                   {(() => {
                     const selectedCount = imagesData?.images?.filter(img => img.selectedForRegen).length || 0;
-                    if (regenPendingCount > 0) return 'Resume';
-                    if (selectedCount > 0) return 'Regenerate Selected';
-                    return 'Regenerate All';
+                    if (regenPendingCount > 0) return 'Reanudar';
+                    if (selectedCount > 0) return 'Regenerar selección';
+                    return 'Regenerar todas';
                   })()}
                   {regenPendingCount > 0 && (
                     <Badge variant="secondary" className="ml-1 h-4 px-1 text-[9px] bg-amber-100 text-amber-700">
@@ -252,12 +326,39 @@ export function BatchOperationsBar() {
               <TooltipContent>
                 {(() => {
                   const selectedCount = imagesData?.images?.filter(img => img.selectedForRegen).length || 0;
-                  if (regenPendingCount > 0) return `Resume regeneration — ${regenPendingCount} image(s) remaining`;
-                  if (selectedCount > 0) return `Regenerate only ${selectedCount} selected image(s)`;
-                  return 'Regenerate ALL images. Select images with checkbox to regenerate only those.';
+                  if (regenPendingCount > 0) return `Reanudar regeneración — quedan ${regenPendingCount} imagen(es)`;
+                  if (selectedCount > 0) return `Regenerar solo ${selectedCount} imagen(es) seleccionada(s)`;
+                  return 'Regenerar TODAS las imágenes. Selecciona con el checkbox para regenerar solo esas.';
                 })()}
               </TooltipContent>
             </Tooltip>
+
+            {(dataset?.stats?.error ?? 0) > 0 && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs gap-1.5 border-red-300 text-red-600 hover:bg-red-50"
+                    onClick={handleRetryFailed}
+                    disabled={!activeDatasetId || batchOperation.isRunning}
+                  >
+                    {batchOperation.isRunning && batchOperation.type === 'regenerate' ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RotateCcw className="h-3.5 w-3.5" />
+                    )}
+                    Reintentar fallidas
+                    <Badge variant="secondary" className="ml-1 h-4 px-1 text-[9px] bg-red-100 text-red-700">
+                      {dataset?.stats?.error}
+                    </Badge>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Retry only the {dataset?.stats?.error} image(s) that failed in a previous run
+                </TooltipContent>
+              </Tooltip>
+            )}
 
             <Tooltip>
               <TooltipTrigger asChild>
@@ -269,7 +370,7 @@ export function BatchOperationsBar() {
                   disabled={!activeDatasetId || !dataset?.imagePath}
                 >
                   <FolderOpen className="h-3.5 w-3.5" />
-                  Import
+                  Importar
                 </Button>
               </TooltipTrigger>
               <TooltipContent>Re-import images from the dataset folder</TooltipContent>
@@ -285,7 +386,7 @@ export function BatchOperationsBar() {
                   disabled={!activeDatasetId || (dataset?.stats?.captioned ?? 0) === 0}
                 >
                   <Download className="h-3.5 w-3.5" />
-                  Download
+                  Descargar
                 </Button>
               </TooltipTrigger>
               <TooltipContent>Download dataset as ZIP (images + caption .txt files)</TooltipContent>
@@ -298,8 +399,8 @@ export function BatchOperationsBar() {
           <div className="ml-auto flex items-center gap-3">
             <div className="flex items-center gap-2 min-w-0">
               <span className="text-xs text-muted-foreground whitespace-nowrap">
-                {batchOperation.type === 'analyze' ? 'Analyzing' : 
-                 batchOperation.type === 'regenerate' ? 'Regenerating' : 'Generating'}...
+                {batchOperation.type === 'analyze' ? 'Analizando' : 
+                 batchOperation.type === 'regenerate' ? 'Regenerando' : 'Generando'}...
               </span>
               <span className="text-xs font-medium tabular-nums">
                 {batchOperation.progress.processed}/{batchOperation.progress.total}
@@ -309,10 +410,12 @@ export function BatchOperationsBar() {
             <Button
               size="sm"
               variant="ghost"
-              className="h-6 text-xs text-red-500 hover:text-red-600 hover:bg-red-50"
+              className="h-6 text-xs text-amber-600 hover:text-amber-700 hover:bg-amber-50"
               onClick={cancelOperation}
+              title="Pause the batch. Remaining images keep their 'pending' status so you can Resume later."
             >
-              Cancel
+              <Pause className="h-3 w-3 mr-1" />
+              Pausar
             </Button>
           </div>
         )}
@@ -324,6 +427,18 @@ export function BatchOperationsBar() {
           </span>
         )}
       </div>
+
+      <DatasetStatsDialog
+        open={statsOpen}
+        onOpenChange={setStatsOpen}
+        datasetId={activeDatasetId}
+      />
+
+      <DuplicatesDialog
+        open={duplicatesOpen}
+        onOpenChange={setDuplicatesOpen}
+        datasetId={activeDatasetId}
+      />
     </div>
   );
 }

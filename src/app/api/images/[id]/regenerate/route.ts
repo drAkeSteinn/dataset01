@@ -13,6 +13,30 @@ type RouteContext = {
   params: Promise<{ id: string }>;
 };
 
+// ─── Per-process regeneration queue ─────────────────────────────────────────
+//
+// Single-image regenerations triggered from the detail panel are serialized
+// across the whole server process. If a user clicks "Regenerate" on image A,
+// then switches to image B and clicks again, B waits in the queue until A
+// finishes. This prevents concurrent calls to the LLM provider (especially
+// ZAI) which would otherwise trigger HTTP 429 rate-limit errors.
+//
+// The queue is a simple promise chain: each request awaits the previous one.
+
+let regenerationChain: Promise<unknown> = Promise.resolve();
+
+async function withRegenerationLock<T>(task: () => Promise<T>): Promise<T> {
+  // Chain this task after the previous one. We catch errors on the chain
+  // itself so a failure in one task never blocks subsequent tasks.
+  const run = regenerationChain.then(task, task);
+  // Keep the chain going even if this task rejects.
+  regenerationChain = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
 /**
  * POST /api/images/[id]/regenerate - Regenerate caption for a single image
  *
@@ -77,33 +101,38 @@ export async function POST(
     const providerId = dataset.llmProvider || 'zai';
     const provider = getProvider(providerId);
 
-    // Generate the caption
-    const caption = await provider.generateCaption({
-      imagePath: image.originalPath,
-      vlmAnalysis: image.vlmAnalysis,
-      colorInfo: image.colorInfo,
-      imageDescription: imageDescriptionOverride ?? image.imageDescription,
-      triggerWord: dataset.triggerWord,
-      captionStyle: dataset.captionStyle,
-      captionTemplate: dataset.captionTemplate,
-      description: dataset.description,
-      model: dataset.llmModel,
-      endpoint: dataset.llmEndpoint,
+    // Generate the caption inside the per-process lock so concurrent
+    // single-image regenerations are serialized (prevents provider rate-limit
+    // errors when the user clicks "Regenerate" on several images in a row).
+    const { caption, updated } = await withRegenerationLock(async () => {
+      const generated = await provider.generateCaption({
+        imagePath: image.originalPath,
+        vlmAnalysis: image.vlmAnalysis,
+        colorInfo: image.colorInfo,
+        imageDescription: imageDescriptionOverride ?? image.imageDescription,
+        triggerWord: image.triggerWordOverride || dataset.triggerWord,
+        captionStyle: dataset.captionStyle,
+        captionTemplate: dataset.captionTemplate,
+        description: dataset.description,
+        systemPromptOverride: dataset.systemPromptOverride,
+        model: dataset.llmModel,
+        endpoint: dataset.llmEndpoint,
+      });
+
+      if (!generated) {
+        throw new Error('Provider returned an empty caption');
+      }
+
+      // Write caption file to disk + update metadata
+      saveCaption(datasetId, filename, generated);
+      updateImageMetadata(datasetId, filename, {
+        status: 'captioned',
+        errorMessage: '',
+      });
+
+      // Re-read updated image
+      return { caption: generated, updated: getImage(datasetId, filename) };
     });
-
-    if (!caption) {
-      throw new Error('Provider returned an empty caption');
-    }
-
-    // Write caption file to disk + update metadata
-    saveCaption(datasetId, filename, caption);
-    updateImageMetadata(datasetId, filename, {
-      status: 'captioned',
-      errorMessage: '',
-    });
-
-    // Re-read updated image
-    const updated = getImage(datasetId, filename);
 
     return NextResponse.json({
       success: true,

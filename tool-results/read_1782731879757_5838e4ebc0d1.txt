@@ -1,0 +1,758 @@
+     1→import { getZAI } from '@/lib/zai';
+     2→import { cropHead } from '@/lib/image-utils';
+     3→import {
+     4→  buildSystemPrompt,
+     5→  buildUserPrompt,
+     6→  applyTemplate,
+     7→  type CaptionSettings,
+     8→} from '@/lib/caption-templates';
+     9→import fs from 'fs';
+    10→import sharp from 'sharp';
+    11→
+    12→// ─── Types ───────────────────────────────────────────────────────────────────
+    13→
+    14→export interface CaptionParams {
+    15→  imagePath: string;
+    16→  vlmAnalysis: string;
+    17→  colorInfo: string;
+    18→  imageDescription: string;
+    19→  triggerWord: string;
+    20→  captionStyle: string;
+    21→  captionTemplate: string;
+    22→  description: string;
+    23→  model: string;
+    24→  endpoint: string;
+    25→}
+    26→
+    27→export interface LLMProvider {
+    28→  name: string;
+    29→  id: string;
+    30→  needsEndpoint: boolean;
+    31→  needsModel: boolean;
+    32→  supportsVision: boolean;
+    33→  defaultEndpoint: string;
+    34→  generateCaption(params: CaptionParams): Promise<string>;
+    35→}
+    36→
+    37→// ─── Logging ─────────────────────────────────────────────────────────────────
+    38→
+    39→const LOG_FILE = process.env.LOG_FILE || '/home/z/my-project/llm.log';
+    40→
+    41→function log(message: string, data?: unknown): void {
+    42→  const timestamp = new Date().toISOString();
+    43→  const line = `[${timestamp}] ${message}`;
+    44→  console.log(line);
+    45→  if (data !== undefined) {
+    46→    const dataStr = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+    47→    console.log(dataStr);
+    48→    try {
+    49→      fs.appendFileSync(LOG_FILE, `${line}\n${dataStr}\n\n`);
+    50→    } catch {}
+    51→  } else {
+    52→    try {
+    53→      fs.appendFileSync(LOG_FILE, `${line}\n\n`);
+    54→    } catch {}
+    55→  }
+    56→}
+    57→
+    58→// ─── Helpers ─────────────────────────────────────────────────────────────────
+    59→
+    60→/**
+    61→ * Build a prompt string for non-ZAI providers based on caption style and params.
+    62→ * This is a GENERIC prompt — no hardcoded content themes.
+    63→ * The prompt describes an expert art observer analyzing images for LoRA training.
+    64→ */
+    65→function buildPrompt(params: CaptionParams): string {
+    66→  const { triggerWord, captionStyle, captionTemplate, description, imageDescription, vlmAnalysis, colorInfo } = params;
+    67→
+    68→  let styleInstruction = '';
+    69→  if (captionStyle === 'natural') {
+    70→    styleInstruction = 'Write a natural language description, 40-100 words. Use complete, flowing sentences that describe what you observe in the image.';
+    71→  } else if (captionStyle === 'tags') {
+    72→    styleInstruction = 'Write comma-separated tags. List visual elements in order of importance (subject first, then details). Use short descriptive phrases (2-3 words each).';
+    73→  } else {
+    74→    styleInstruction = captionTemplate || 'Write a descriptive caption for this image.';
+    75→  }
+    76→
+    77→  let prompt = `You are an expert visual analyst observing an image for LoRA training dataset captioning.
+    78→
+    79→Your task: Carefully observe the image and write an accurate, detailed caption describing what you see.
+    80→
+    81→CAPTION STYLE: ${styleInstruction}
+    82→${triggerWord ? `TRIGGER WORD: Start your caption with "${triggerWord},"` : ''}
+    83→
+    84→${description ? `DATASET CONTEXT:\n${description}\n\nThis context describes what the dataset is about. Use it to understand the theme and focus of your captions.\n` : ''}${imageDescription ? `IMAGE-SPECIFIC NOTES:\n${imageDescription}\n\nThese are user-provided notes for this specific image. Prioritize this information in your caption.\n` : ''}${vlmAnalysis ? `VISUAL ANALYSIS (from VLM):\n${vlmAnalysis}\n` : ''}${colorInfo ? `COLOR INFO:\n${colorInfo}\n` : ''}
+    85→IMPORTANT INSTRUCTIONS:
+    86→- Observe the image carefully and describe what you actually see
+    87→- Be accurate and specific — do not invent details not present in the image
+    88→- Focus on visual elements: subject, appearance, pose, expression, clothing, setting, lighting, style
+    89→- Do NOT add commentary, explanations, or meta-text
+    90→- Output ONLY the caption text, nothing else
+    91→
+    92→Write the caption now:`;
+    93→
+    94→  return prompt;
+    95→}
+    96→
+    97→/**
+    98→ * Read an image file and return it as a base64 string.
+    99→ */
+   100→async function imageToBase64(imagePath: string): Promise<string> {
+   101→  const buffer = await sharp(imagePath)
+   102→    .jpeg({ quality: 85 })
+   103→    .toBuffer();
+   104→  return buffer.toString('base64');
+   105→}
+   106→
+   107→/**
+   108→ * Detect if an Ollama model name suggests vision capabilities.
+   109→ */
+   110→function isOllamaVisionModel(modelName: string): boolean {
+   111→  const visionPatterns = [
+   112→    'llava', 'bakllava', 'minicpm-v', 'llava-llama3', 'moondream',
+   113→    'ovis', 'qwen2-vl', 'cogvlm', 'internvl', 'idefics', 'paligemma',
+   114→    'fuyu', 'kosmos', 'cogagent', 'xgen-mm', 'yi-vl', 'deepseek-vl',
+   115→    'bunny', 'obsidian', 'immich',
+   116→  ];
+   117→  const lower = modelName.toLowerCase();
+   118→  return visionPatterns.some((p) => lower.includes(p));
+   119→}
+   120→
+   121→/**
+   122→ * Extract caption text from an LLM response.
+   123→ * Handles models that use reasoning_content (like Qwen3.5, DeepSeek-R1, etc.)
+   124→ * where the actual output might be in reasoning_content instead of content.
+   125→ */
+   126→function extractCaptionFromResponse(
+   127→  content: string | undefined,
+   128→  reasoningContent: string | undefined,
+   129→  providerName: string,
+   130→  model: string
+   131→): string {
+   132→  log(`[${providerName}] Extracting caption from response`, {
+   133→    model,
+   134→    contentLength: content?.length || 0,
+   135→    reasoningContentLength: reasoningContent?.length || 0,
+   136→    contentPreview: content?.substring(0, 200) || '(empty)',
+   137→    reasoningPreview: reasoningContent?.substring(0, 200) || '(empty)',
+   138→  });
+   139→
+   140→  // If content is non-empty, use it
+   141→  if (content && content.trim().length > 0) {
+   142→    log(`[${providerName}] Using content field (${content.length} chars)`);
+   143→    return content.trim();
+   144→  }
+   145→
+   146→  // Content is empty — try reasoning_content as fallback
+   147→  // Some models (Qwen3, DeepSeek-R1) put the actual response in reasoning_content
+   148→  // when they run out of tokens during reasoning
+   149→  if (reasoningContent && reasoningContent.trim().length > 0) {
+   150→    log(`[${providerName}] Content empty, extracting from reasoning_content (${reasoningContent.length} chars)`);
+   151→
+   152→    // Try to find the actual caption in the reasoning content
+   153→    // Reasoning models often write their draft caption after phrases like:
+   154→    // "caption:", "Draft:", "Final:", or just the trigger word
+   155→    const reasoning = reasoningContent.trim();
+   156→
+   157→    // Look for lines that start with the trigger word or common caption starters
+   158→    const lines = reasoning.split('\n');
+   159→    const captionCandidates: string[] = [];
+   160→
+   161→    for (const line of lines) {
+   162→      const trimmed = line.trim();
+   163→      // Skip empty lines and reasoning markers
+   164→      if (!trimmed || trimmed.startsWith('**') || trimmed.startsWith('*')) continue;
+   165→      // Look for lines that look like captions (start with common words or trigger patterns)
+   166→      if (trimmed.match(/^(n1pl3fk|[a-zA-Z]+,)/) || trimmed.match(/^(caption|final|draft|answer)[:\s]/i)) {
+   167→        // Clean up the line
+   168→        const cleaned = trimmed.replace(/^(caption|final|draft|answer)[:\s]*/i, '');
+   169→        if (cleaned.length > 10) {
+   170→          captionCandidates.push(cleaned);
+   171→        }
+   172→      }
+   173→    }
+   174→
+   175→    if (captionCandidates.length > 0) {
+   176→      // Use the last candidate (usually the final draft)
+   177→      const caption = captionCandidates[captionCandidates.length - 1];
+   178→      log(`[${providerName}] Extracted caption from reasoning: ${caption.substring(0, 100)}...`);
+   179→      return caption;
+   180→    }
+   181→
+   182→    // If no clear caption found, try to extract the last meaningful paragraph
+   183→    const paragraphs = reasoning.split(/\n\n+/);
+   184→    const lastPara = paragraphs[paragraphs.length - 1]?.trim();
+   185→    if (lastPara && lastPara.length > 20 && !lastPara.startsWith('**')) {
+   186→      log(`[${providerName}] Using last paragraph from reasoning: ${lastPara.substring(0, 100)}...`);
+   187→      return lastPara;
+   188→    }
+   189→
+   190→    // Last resort: return the reasoning content itself (truncated)
+   191→    log(`[${providerName}] No clear caption found, using raw reasoning (truncated)`);
+   192→    return reasoning.substring(0, 500);
+   193→  }
+   194→
+   195→  log(`[${providerName}] WARNING: Both content and reasoning_content are empty!`);
+   196→  return '';
+   197→}
+   198→
+   199→/**
+   200→ * Post-process a generated caption: prepend trigger word if needed, apply template for custom style.
+   201→ */
+   202→function postProcessCaption(
+   203→  rawCaption: string,
+   204→  params: CaptionParams
+   205→): string {
+   206→  let caption = rawCaption.trim();
+   207→
+   208→  // Remove any leading/trailing quotes
+   209→  caption = caption.replace(/^["'`]+|["'`]+$/g, '');
+   210→
+   211→  // Remove "Caption:" prefix if present
+   212→  caption = caption.replace(/^(caption|final caption|answer)[:\s]*/i, '');
+   213→
+   214→  const settings: CaptionSettings = {
+   215→    triggerWord: params.triggerWord,
+   216→    captionStyle: params.captionStyle as 'natural' | 'tags' | 'custom',
+   217→    captionTemplate: params.captionTemplate,
+   218→  };
+   219→
+   220→  // For custom style, apply template if the LLM didn't already use it
+   221→  if (settings.captionStyle === 'custom' && settings.captionTemplate) {
+   222→    if (
+   223→      caption.includes('{trigger}') ||
+   224→      caption.includes('{description}') ||
+   225→      caption.includes('{colors}') ||
+   226→      caption.includes('{style}')
+   227→    ) {
+   228→      let colorsStr = '';
+   229→      try {
+   230→        const colorData = JSON.parse(params.colorInfo);
+   231→        colorsStr = colorData.dominant || '';
+   232→      } catch {
+   233→        colorsStr = params.colorInfo;
+   234→      }
+   235→
+   236→      caption = applyTemplate(caption, {
+   237→        trigger: settings.triggerWord,
+   238→        description: params.vlmAnalysis,
+   239→        colors: colorsStr,
+   240→        style: '',
+   241→      });
+   242→    }
+   243→  }
+   244→
+   245→  // Prepend trigger word if style is natural or tags and trigger word exists
+   246→  if (
+   247→    settings.triggerWord &&
+   248→    settings.captionStyle !== 'custom' &&
+   249→    !caption.toLowerCase().startsWith(settings.triggerWord.toLowerCase())
+   250→  ) {
+   251→    caption = `${settings.triggerWord}, ${caption}`;
+   252→  }
+   253→
+   254→  return caption;
+   255→}
+   256→
+   257→// ─── ZAI Provider ────────────────────────────────────────────────────────────
+   258→
+   259→const zaiProvider: LLMProvider = {
+   260→  name: 'ZAI SDK',
+   261→  id: 'zai',
+   262→  needsEndpoint: false,
+   263→  needsModel: false,
+   264→  supportsVision: true,
+   265→  defaultEndpoint: '',
+   266→
+   267→  async generateCaption(params: CaptionParams): Promise<string> {
+   268→    const {
+   269→      imagePath,
+   270→      vlmAnalysis: existingAnalysis,
+   271→      colorInfo,
+   272→      triggerWord,
+   273→      captionStyle,
+   274→      captionTemplate,
+   275→      description,
+   276→      imageDescription,
+   277→    } = params;
+   278→
+   279→    log('[ZAI] Starting caption generation', {
+   280→      imagePath,
+   281→      hasVlmAnalysis: !!existingAnalysis,
+   282→      hasColorInfo: !!colorInfo,
+   283→      hasImageDescription: !!imageDescription,
+   284→      hasDescription: !!description,
+   285→      triggerWord,
+   286→      captionStyle,
+   287→    });
+   288→
+   289→    let vlmAnalysis = existingAnalysis;
+   290→
+   291→    // Step 1: If no VLM analysis exists, run VLM analysis first
+   292→    if (!vlmAnalysis) {
+   293→      if (!fs.existsSync(imagePath)) {
+   294→        throw new Error(`Image file not found: ${imagePath}`);
+   295→      }
+   296→
+   297→      let success = false;
+   298→      let cropRatio = 0.20;
+   299→
+   300→      while (!success && cropRatio > 0.05) {
+   301→        try {
+   302→          const headCrop = await cropHead(imagePath, cropRatio);
+   303→          const base64Image = headCrop.toString('base64');
+   304→          const dataUrl = `data:image/jpeg;base64,${base64Image}`;
+   305→
+   306→          const zai = await getZAI();
+   307→          const vlmResponse = await zai.chat.completions.createVision({
+   308→            model: 'gpt-4o',
+   309→            messages: [
+   310→              {
+   311→                role: 'system',
+   312→                content:
+   313→                  'You are an expert image analyst for LoRA training datasets. Describe the subject in detail including: appearance, features, clothing, pose, expression, and any distinctive characteristics. Be thorough and specific.',
+   314→              },
+   315→              {
+   316→                role: 'user',
+   317→                content: [
+   318→                  {
+   319→                    type: 'text',
+   320→                    text: 'Describe this image in detail for a LoRA training dataset. Focus on the subject\'s visual characteristics.',
+   321→                  },
+   322→                  {
+   323→                    type: 'image_url',
+   324→                    image_url: { url: dataUrl },
+   325→                  },
+   326→                ],
+   327→              },
+   328→            ],
+   329→          });
+   330→
+   331→          if (vlmResponse?.choices?.[0]?.message?.content) {
+   332→            vlmAnalysis = vlmResponse.choices[0].message.content;
+   333→            success = true;
+   334→            log('[ZAI] VLM analysis completed', { length: vlmAnalysis.length });
+   335→          } else if (
+   336→            vlmResponse?.content_filter?.some(
+   337→              (f: { level: number }) => f.level === 1301
+   338→            )
+   339→          ) {
+   340→            if (cropRatio > 0.08) {
+   341→              cropRatio = 0.08;
+   342→              continue;
+   343→            } else {
+   344→              throw new Error('Content filter triggered even with minimal crop');
+   345→            }
+   346→          } else {
+   347→            throw new Error('Empty VLM response');
+   348→          }
+   349→        } catch (err: unknown) {
+   350→          const errorObj = err as { status?: number; message?: string };
+   351→          if (errorObj.status === 429) {
+   352→            await new Promise((resolve) => setTimeout(resolve, 25000));
+   353→            continue;
+   354→          }
+   355→          if (
+   356→            errorObj.message?.includes('1301') ||
+   357→            errorObj.message?.includes('content_filter')
+   358→          ) {
+   359→            if (cropRatio > 0.08) {
+   360→              cropRatio = 0.08;
+   361→              continue;
+   362→            }
+   363→          }
+   364→          throw err;
+   365→        }
+   366→      }
+   367→
+   368→      if (!success) {
+   369→        throw new Error('VLM analysis failed after retries');
+   370→      }
+   371→    }
+   372→
+   373→    // Step 2: Use LLM to generate caption from analysis
+   374→    const settings: CaptionSettings = {
+   375→      triggerWord,
+   376→      captionStyle: captionStyle as 'natural' | 'tags' | 'custom',
+   377→      captionTemplate,
+   378→      description,
+   379→    };
+   380→
+   381→    const systemPrompt = buildSystemPrompt(settings);
+   382→    const userPrompt = buildUserPrompt(vlmAnalysis, colorInfo, imageDescription);
+   383→
+   384→    log('[ZAI] Sending caption generation request', {
+   385→      systemPromptLength: systemPrompt.length,
+   386→      userPromptLength: userPrompt.length,
+   387→      hasDescription: !!description,
+   388→      hasImageDescription: !!imageDescription,
+   389→    });
+   390→
+   391→    const zai = await getZAI();
+   392→    const response = await zai.chat.completions.create({
+   393→      model: 'gpt-4o',
+   394→      messages: [
+   395→        { role: 'system', content: systemPrompt },
+   396→        { role: 'user', content: userPrompt },
+   397→      ],
+   398→    });
+   399→
+   400→    const rawCaption = response?.choices?.[0]?.message?.content?.trim() || '';
+   401→    log('[ZAI] Caption generated', { rawLength: rawCaption.length, preview: rawCaption.substring(0, 100) });
+   402→
+   403→    return postProcessCaption(rawCaption, params);
+   404→  },
+   405→};
+   406→
+   407→// ─── Ollama Provider ─────────────────────────────────────────────────────────
+   408→
+   409→const ollamaProvider: LLMProvider = {
+   410→  name: 'Ollama',
+   411→  id: 'ollama',
+   412→  needsEndpoint: true,
+   413→  needsModel: true,
+   414→  supportsVision: true,
+   415→  defaultEndpoint: 'http://localhost:11434',
+   416→
+   417→  async generateCaption(params: CaptionParams): Promise<string> {
+   418→    const { imagePath, model, endpoint } = params;
+   419→    const baseUrl = endpoint || ollamaProvider.defaultEndpoint;
+   420→
+   421→    if (!fs.existsSync(imagePath)) {
+   422→      throw new Error(`Image file not found: ${imagePath}`);
+   423→    }
+   424→
+   425→    const base64Image = await imageToBase64(imagePath);
+   426→    const prompt = buildPrompt(params);
+   427→    const isVision = isOllamaVisionModel(model);
+   428→
+   429→    log('[Ollama] Starting caption generation', {
+   430→      model, endpoint: baseUrl, isVision,
+   431→      hasDescription: !!params.description,
+   432→      hasImageDescription: !!params.imageDescription,
+   433→      promptLength: prompt.length,
+   434→    });
+   435→
+   436→    let rawCaption = '';
+   437→
+   438→    if (isVision) {
+   439→      const body = {
+   440→        model,
+   441→        prompt,
+   442→        images: [base64Image],
+   443→        stream: false,
+   444→        options: {
+   445→          temperature: 0.7,
+   446→          num_predict: 500,
+   447→        },
+   448→      };
+   449→
+   450→      log('[Ollama] Sending vision request', { model, promptPreview: prompt.substring(0, 200) });
+   451→
+   452→      const response = await fetch(`${baseUrl}/api/generate`, {
+   453→        method: 'POST',
+   454→        headers: { 'Content-Type': 'application/json' },
+   455→        body: JSON.stringify(body),
+   456→        signal: AbortSignal.timeout(120000),
+   457→      });
+   458→
+   459→      if (!response.ok) {
+   460→        const errorText = await response.text().catch(() => 'Unknown error');
+   461→        throw new Error(`Ollama API error (${response.status}): ${errorText}`);
+   462→      }
+   463→
+   464→      const data = (await response.json()) as { response?: string };
+   465→      rawCaption = data.response || '';
+   466→      log('[Ollama] Response received', { rawLength: rawCaption.length, preview: rawCaption.substring(0, 100) });
+   467→    } else {
+   468→      const body = {
+   469→        model,
+   470→        messages: [
+   471→          {
+   472→            role: 'system',
+   473→            content: 'You are an expert visual analyst creating captions for LoRA training datasets. Observe carefully and describe accurately.',
+   474→          },
+   475→          { role: 'user', content: prompt },
+   476→        ],
+   477→        stream: false,
+   478→        options: {
+   479→          temperature: 0.7,
+   480→          num_predict: 500,
+   481→        },
+   482→      };
+   483→
+   484→      log('[Ollama] Sending text request', { model, promptPreview: prompt.substring(0, 200) });
+   485→
+   486→      const response = await fetch(`${baseUrl}/api/chat`, {
+   487→        method: 'POST',
+   488→        headers: { 'Content-Type': 'application/json' },
+   489→        body: JSON.stringify(body),
+   490→        signal: AbortSignal.timeout(120000),
+   491→      });
+   492→
+   493→      if (!response.ok) {
+   494→        const errorText = await response.text().catch(() => 'Unknown error');
+   495→        throw new Error(`Ollama API error (${response.status}): ${errorText}`);
+   496→      }
+   497→
+   498→      const data = (await response.json()) as {
+   499→        message?: { content?: string };
+   500→      };
+   501→      rawCaption = data.message?.content || '';
+   502→      log('[Ollama] Response received', { rawLength: rawCaption.length, preview: rawCaption.substring(0, 100) });
+   503→    }
+   504→
+   505→    return postProcessCaption(rawCaption, params);
+   506→  },
+   507→};
+   508→
+   509→// ─── LM Studio Provider ──────────────────────────────────────────────────────
+   510→
+   511→const lmstudioProvider: LLMProvider = {
+   512→  name: 'LM Studio',
+   513→  id: 'lmstudio',
+   514→  needsEndpoint: true,
+   515→  needsModel: true,
+   516→  supportsVision: true,
+   517→  defaultEndpoint: 'http://localhost:1234',
+   518→
+   519→  async generateCaption(params: CaptionParams): Promise<string> {
+   520→    const { imagePath, model, endpoint } = params;
+   521→    const baseUrl = endpoint || lmstudioProvider.defaultEndpoint;
+   522→
+   523→    if (!fs.existsSync(imagePath)) {
+   524→      throw new Error(`Image file not found: ${imagePath}`);
+   525→    }
+   526→
+   527→    const base64Image = await imageToBase64(imagePath);
+   528→    const prompt = buildPrompt(params);
+   529→
+   530→    log('[LM Studio] Starting caption generation', {
+   531→      model,
+   532→      endpoint: baseUrl,
+   533→      imagePath,
+   534→      hasDescription: !!params.description,
+   535→      descriptionPreview: params.description?.substring(0, 100),
+   536→      hasImageDescription: !!params.imageDescription,
+   537→      imageDescriptionPreview: params.imageDescription?.substring(0, 100),
+   538→      hasVlmAnalysis: !!params.vlmAnalysis,
+   539→      hasColorInfo: !!params.colorInfo,
+   540→      triggerWord: params.triggerWord,
+   541→      captionStyle: params.captionStyle,
+   542→      promptLength: prompt.length,
+   543→    });
+   544→
+   545→    // Build OpenAI-compatible messages with vision support
+   546→    const userContent: Array<
+   547→      | { type: 'text'; text: string }
+   548→      | { type: 'image_url'; image_url: { url: string } }
+   549→    > = [
+   550→      { type: 'text', text: prompt },
+   551→      {
+   552→        type: 'image_url',
+   553→        image_url: { url: `data:image/jpeg;base64,${base64Image}` },
+   554→      },
+   555→    ];
+   556→
+   557→    // Build the request body
+   558→    // - max_tokens: 2000 (high to accommodate reasoning models)
+   559→    // - chat_template_kwargs: disable thinking for Qwen models that support it
+   560→    const body: Record<string, unknown> = {
+   561→      model: model || 'default',
+   562→      messages: [
+   563→        {
+   564→          role: 'system',
+   565→          content: 'You are an expert visual analyst creating captions for LoRA training datasets. Observe the image carefully and describe what you see accurately. Output ONLY the caption text.',
+   566→        },
+   567→        { role: 'user', content: userContent },
+   568→      ],
+   569→      max_tokens: 2000,
+   570→      temperature: 0.7,
+   571→      // Disable thinking/reasoning mode for models that support it (Qwen3, etc.)
+   572→      // This prevents the model from wasting tokens on internal reasoning
+   573→      chat_template_kwargs: { enable_thinking: false },
+   574→    };
+   575→
+   576→    log('[LM Studio] Sending request', {
+   577→      url: `${baseUrl}/v1/chat/completions`,
+   578→      model: body.model,
+   579→      max_tokens: body.max_tokens,
+   580→      promptPreview: prompt.substring(0, 300),
+   581→    });
+   582→
+   583→    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+   584→      method: 'POST',
+   585→      headers: { 'Content-Type': 'application/json' },
+   586→      body: JSON.stringify(body),
+   587→      signal: AbortSignal.timeout(120000),
+   588→    });
+   589→
+   590→    if (!response.ok) {
+   591→      const errorText = await response.text().catch(() => 'Unknown error');
+   592→      log('[LM Studio] API error', { status: response.status, errorText });
+   593→      throw new Error(`LM Studio API error (${response.status}): ${errorText}`);
+   594→    }
+   595→
+   596→    const data = (await response.json()) as {
+   597→      choices?: Array<{
+   598→        message?: {
+   599→          content?: string;
+   600→          reasoning_content?: string;
+   601→        };
+   602→        finish_reason?: string;
+   603→      }>;
+   604→      usage?: {
+   605→        prompt_tokens?: number;
+   606→        completion_tokens?: number;
+   607→        total_tokens?: number;
+   608→        completion_tokens_details?: { reasoning_tokens?: number };
+   609→      };
+   610→    };
+   611→
+   612→    log('[LM Studio] Response received', {
+   613→      finishReason: data.choices?.[0]?.finish_reason,
+   614→      usage: data.usage,
+   615→      contentLength: data.choices?.[0]?.message?.content?.length || 0,
+   616→      reasoningContentLength: data.choices?.[0]?.message?.reasoning_content?.length || 0,
+   617→    });
+   618→
+   619→    // Extract caption — handle reasoning models that put output in reasoning_content
+   620→    const content = data.choices?.[0]?.message?.content;
+   621→    const reasoningContent = data.choices?.[0]?.message?.reasoning_content;
+   622→
+   623→    const rawCaption = extractCaptionFromResponse(content, reasoningContent, 'LM Studio', model || 'default');
+   624→
+   625→    log('[LM Studio] Final caption', {
+   626→      rawLength: rawCaption.length,
+   627→      preview: rawCaption.substring(0, 200),
+   628→    });
+   629→
+   630→    return postProcessCaption(rawCaption, params);
+   631→  },
+   632→};
+   633→
+   634→// ─── TextGen WebUI Provider ──────────────────────────────────────────────────
+   635→
+   636→const textgenProvider: LLMProvider = {
+   637→  name: 'Text Generation WebUI',
+   638→  id: 'textgen',
+   639→  needsEndpoint: true,
+   640→  needsModel: true,
+   641→  supportsVision: true,
+   642→  defaultEndpoint: 'http://localhost:5000',
+   643→
+   644→  async generateCaption(params: CaptionParams): Promise<string> {
+   645→    const { imagePath, model, endpoint } = params;
+   646→    const baseUrl = endpoint || textgenProvider.defaultEndpoint;
+   647→
+   648→    if (!fs.existsSync(imagePath)) {
+   649→      throw new Error(`Image file not found: ${imagePath}`);
+   650→    }
+   651→
+   652→    const base64Image = await imageToBase64(imagePath);
+   653→    const prompt = buildPrompt(params);
+   654→
+   655→    log('[TextGen] Starting caption generation', {
+   656→      model, endpoint: baseUrl,
+   657→      hasDescription: !!params.description,
+   658→      hasImageDescription: !!params.imageDescription,
+   659→      promptLength: prompt.length,
+   660→    });
+   661→
+   662→    const userContent: Array<
+   663→      | { type: 'text'; text: string }
+   664→      | { type: 'image_url'; image_url: { url: string } }
+   665→    > = [
+   666→      { type: 'text', text: prompt },
+   667→      {
+   668→        type: 'image_url',
+   669→        image_url: { url: `data:image/jpeg;base64,${base64Image}` },
+   670→      },
+   671→    ];
+   672→
+   673→    const body: Record<string, unknown> = {
+   674→      model: model || 'default',
+   675→      messages: [
+   676→        {
+   677→          role: 'system',
+   678→          content: 'You are an expert visual analyst creating captions for LoRA training datasets. Observe the image carefully and describe what you see accurately. Output ONLY the caption text.',
+   679→        },
+   680→        { role: 'user', content: userContent },
+   681→      ],
+   682→      max_tokens: 2000,
+   683→      temperature: 0.7,
+   684→    };
+   685→
+   686→    log('[TextGen] Sending request', { url: `${baseUrl}/api/v1/chat/completions`, promptPreview: prompt.substring(0, 200) });
+   687→
+   688→    const response = await fetch(`${baseUrl}/api/v1/chat/completions`, {
+   689→      method: 'POST',
+   690→      headers: { 'Content-Type': 'application/json' },
+   691→      body: JSON.stringify(body),
+   692→      signal: AbortSignal.timeout(120000),
+   693→    });
+   694→
+   695→    if (!response.ok) {
+   696→      const errorText = await response.text().catch(() => 'Unknown error');
+   697→      log('[TextGen] API error', { status: response.status, errorText });
+   698→      throw new Error(`TextGen WebUI API error (${response.status}): ${errorText}`);
+   699→    }
+   700→
+   701→    const data = (await response.json()) as {
+   702→      choices?: Array<{
+   703→        message?: {
+   704→          content?: string;
+   705→          reasoning_content?: string;
+   706→        };
+   707→        finish_reason?: string;
+   708→      }>;
+   709→    };
+   710→
+   711→    const content = data.choices?.[0]?.message?.content;
+   712→    const reasoningContent = data.choices?.[0]?.message?.reasoning_content;
+   713→
+   714→    const rawCaption = extractCaptionFromResponse(content, reasoningContent, 'TextGen', model || 'default');
+   715→
+   716→    log('[TextGen] Final caption', { rawLength: rawCaption.length, preview: rawCaption.substring(0, 200) });
+   717→
+   718→    return postProcessCaption(rawCaption, params);
+   719→  },
+   720→};
+   721→
+   722→// ─── Registry ────────────────────────────────────────────────────────────────
+   723→
+   724→export const PROVIDERS: Record<string, LLMProvider> = {
+   725→  zai: zaiProvider,
+   726→  ollama: ollamaProvider,
+   727→  lmstudio: lmstudioProvider,
+   728→  textgen: textgenProvider,
+   729→};
+   730→
+   731→export function getProvider(id: string): LLMProvider {
+   732→  const provider = PROVIDERS[id];
+   733→  if (!provider) {
+   734→    throw new Error(`Unknown LLM provider: ${id}. Available: ${Object.keys(PROVIDERS).join(', ')}`);
+   735→  }
+   736→  return provider;
+   737→}
+   738→
+   739→export function listProviders(): Array<{
+   740→  id: string;
+   741→  name: string;
+   742→  needsEndpoint: boolean;
+   743→  needsModel: boolean;
+   744→  supportsVision: boolean;
+   745→  defaultEndpoint: string;
+   746→}> {
+   747→  return Object.values(PROVIDERS).map((p) => ({
+   748→    id: p.id,
+   749→    name: p.name,
+   750→    needsEndpoint: p.needsEndpoint,
+   751→    needsModel: p.needsModel,
+   752→    supportsVision: p.supportsVision,
+   753→    defaultEndpoint: p.defaultEndpoint,
+   754→  }));
+   755→}
+   756→
+   757→export { isOllamaVisionModel };
+   758→

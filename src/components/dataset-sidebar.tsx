@@ -65,7 +65,7 @@ export function DatasetSidebar() {
             <div className="px-2 py-8 text-center">
               <Database className="mx-auto h-8 w-8 text-zinc-700" />
               <p className="mt-2 text-xs text-zinc-500">
-                {search ? 'No matching datasets' : 'No datasets yet'}
+                {search ? 'No hay datasets coincidentes' : 'Aún no hay datasets'}
               </p>
               {!search && (
                 <Button
@@ -74,7 +74,7 @@ export function DatasetSidebar() {
                   className="mt-2 text-xs text-emerald-400 hover:text-emerald-300 hover:bg-zinc-800"
                   onClick={() => setShowCreateDialog(true)}
                 >
-                  Create your first dataset
+                  Crea tu primer dataset
                 </Button>
               )}
             </div>

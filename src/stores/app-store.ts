@@ -18,9 +18,22 @@ interface AppState {
   galleryFilter: ImageStatus | 'all';
   setGalleryFilter: (filter: ImageStatus | 'all') => void;
 
+  // Gallery sort order
+  gallerySort: GallerySortKey;
+  setGallerySort: (sort: GallerySortKey) => void;
+
   // Gallery zoom (columns: 3-6)
   galleryZoom: number;
   setGalleryZoom: (zoom: number) => void;
+
+  // Lightbox (full-size image viewer)
+  lightboxImageId: string | null;
+  setLightboxImageId: (id: string | null) => void;
+
+  // Caption highlight — when set, the detail panel highlights this text in the
+  // caption editor (e.g. after clicking a search result in Tags > Search).
+  captionHighlight: string | null;
+  setCaptionHighlight: (text: string | null) => void;
 
   // Batch operation
   batchOperation: BatchOperationState;
@@ -32,6 +45,15 @@ interface AppState {
   finishBatchOperation: () => void;
   resetBatchOperation: () => void;
 }
+
+export type GallerySortKey =
+  | 'name-asc'
+  | 'name-desc'
+  | 'date-newest'
+  | 'date-oldest'
+  | 'size-largest'
+  | 'caption-longest'
+  | 'caption-shortest';
 
 const initialBatchState: BatchOperationState = {
   isRunning: false,
@@ -59,9 +81,21 @@ export const useAppStore = create<AppState>((set) => ({
   galleryFilter: 'all',
   setGalleryFilter: (filter) => set({ galleryFilter: filter }),
 
+  // Gallery sort
+  gallerySort: 'name-asc',
+  setGallerySort: (sort) => set({ gallerySort: sort }),
+
   // Gallery zoom
   galleryZoom: 4,
   setGalleryZoom: (zoom) => set({ galleryZoom: Math.min(6, Math.max(3, zoom)) }),
+
+  // Lightbox
+  lightboxImageId: null,
+  setLightboxImageId: (id) => set({ lightboxImageId: id }),
+
+  // Caption highlight
+  captionHighlight: null,
+  setCaptionHighlight: (text) => set({ captionHighlight: text }),
 
   // Batch operation
   batchOperation: initialBatchState,

@@ -28,8 +28,10 @@ export async function GET(
     const { searchParams } = request.nextUrl;
 
     const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
+    // Allow large datasets to load in a single request. The previous cap of 500
+    // silently truncated galleries with more images than that.
     const limit = Math.min(
-      500,
+      10000,
       Math.max(1, parseInt(searchParams.get('limit') || '20', 10))
     );
     const statusParam = searchParams.get('status');

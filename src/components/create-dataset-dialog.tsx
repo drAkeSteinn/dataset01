@@ -72,7 +72,7 @@ export function CreateDatasetDialog({ open, onOpenChange }: CreateDatasetDialogP
     <Dialog open={open} onOpenChange={(v) => { if (!v) resetForm(); onOpenChange(v); }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Create New Dataset</DialogTitle>
+          <DialogTitle>Crear nuevo dataset</DialogTitle>
           <DialogDescription>
             Create a new dataset for LoRA training. You can import images from an existing folder.
           </DialogDescription>
@@ -80,7 +80,7 @@ export function CreateDatasetDialog({ open, onOpenChange }: CreateDatasetDialogP
 
         <div className="space-y-4 py-2">
           <div className="space-y-2">
-            <Label htmlFor="dataset-name">Name *</Label>
+            <Label htmlFor="dataset-name">Nombre *</Label>
             <Input
               id="dataset-name"
               placeholder="My Character Dataset"
@@ -90,7 +90,7 @@ export function CreateDatasetDialog({ open, onOpenChange }: CreateDatasetDialogP
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="dataset-description">Description</Label>
+            <Label htmlFor="dataset-description">Descripción</Label>
             <Textarea
               id="dataset-description"
               placeholder="Describe this dataset..."
@@ -101,7 +101,7 @@ export function CreateDatasetDialog({ open, onOpenChange }: CreateDatasetDialogP
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="trigger-word">Trigger Word</Label>
+            <Label htmlFor="trigger-word">Trigger word</Label>
             <Input
               id="trigger-word"
               placeholder="e.g. xyz123"
@@ -114,7 +114,7 @@ export function CreateDatasetDialog({ open, onOpenChange }: CreateDatasetDialogP
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="caption-style">Caption Style</Label>
+            <Label htmlFor="caption-style">Estilo de caption</Label>
             <Select value={captionStyle} onValueChange={(v) => setCaptionStyle(v as CaptionStyle)}>
               <SelectTrigger id="caption-style">
                 <SelectValue />
@@ -168,7 +168,7 @@ export function CreateDatasetDialog({ open, onOpenChange }: CreateDatasetDialogP
             {createDataset.isPending && (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             )}
-            Create Dataset
+            Crear dataset
           </Button>
         </DialogFooter>
       </DialogContent>

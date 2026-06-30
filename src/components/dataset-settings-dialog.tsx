@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Loader2, RefreshCw, Server, CheckCircle2, XCircle, Database } from 'lucide-react';
+import { Loader2, RefreshCw, Server, CheckCircle2, XCircle, Database, Sparkles } from 'lucide-react';
 import { DatabaseManager } from '@/components/database-manager';
+import { CAPTION_PRESETS, type CaptionPreset } from '@/lib/caption-presets';
 import {
   Dialog,
   DialogContent,
@@ -56,7 +57,9 @@ export function DatasetSettingsDialog({ open, onOpenChange }: DatasetSettingsDia
   const [triggerWord, setTriggerWord] = useState('');
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>('tags');
   const [captionTemplate, setCaptionTemplate] = useState('');
-  
+  const [systemPromptOverride, setSystemPromptOverride] = useState('');
+  const [showAdvancedPrompt, setShowAdvancedPrompt] = useState(false);
+
   // LLM Provider fields
   const [llmProvider, setLlmProvider] = useState<LLMProvider>('zai');
   const [llmModel, setLlmModel] = useState('');
@@ -75,6 +78,7 @@ export function DatasetSettingsDialog({ open, onOpenChange }: DatasetSettingsDia
       setTriggerWord(dataset.triggerWord);
       setCaptionStyle(dataset.captionStyle as CaptionStyle);
       setCaptionTemplate(dataset.captionTemplate);
+      setSystemPromptOverride(dataset.systemPromptOverride || '');
       setLlmProvider((dataset.llmProvider as LLMProvider) || 'zai');
       setLlmModel(dataset.llmModel || '');
       setLlmEndpoint(dataset.llmEndpoint || '');
@@ -157,6 +161,7 @@ export function DatasetSettingsDialog({ open, onOpenChange }: DatasetSettingsDia
         llmProvider,
         llmModel: llmModel.trim(),
         llmEndpoint: llmEndpoint.trim(),
+        systemPromptOverride: systemPromptOverride.trim(),
       });
       onOpenChange(false);
     } catch {
@@ -208,7 +213,7 @@ export function DatasetSettingsDialog({ open, onOpenChange }: DatasetSettingsDia
             }`}
             onClick={() => setActiveTab('provider')}
           >
-            LLM Provider
+            Proveedor LLM
           </button>
           <button
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
@@ -218,7 +223,7 @@ export function DatasetSettingsDialog({ open, onOpenChange }: DatasetSettingsDia
             }`}
             onClick={() => setActiveTab('database')}
           >
-            Database
+            Base de datos
           </button>
         </div>
 
@@ -226,12 +231,12 @@ export function DatasetSettingsDialog({ open, onOpenChange }: DatasetSettingsDia
         {activeTab === 'general' && (
           <div className="space-y-4 py-2">
             <div className="space-y-2">
-              <Label htmlFor="settings-name">Name</Label>
+              <Label htmlFor="settings-name">Nombre</Label>
               <Input id="settings-name" value={name} onChange={(e) => setName(e.target.value)} />
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="settings-description">Description</Label>
+              <Label htmlFor="settings-description">Descripción</Label>
               <Textarea
                 id="settings-description"
                 value={description}
@@ -245,7 +250,7 @@ export function DatasetSettingsDialog({ open, onOpenChange }: DatasetSettingsDia
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="settings-trigger">Trigger Word</Label>
+              <Label htmlFor="settings-trigger">Trigger word</Label>
               <Input
                 id="settings-trigger"
                 value={triggerWord}
@@ -257,28 +262,63 @@ export function DatasetSettingsDialog({ open, onOpenChange }: DatasetSettingsDia
               </p>
             </div>
 
+            {/* Caption presets — quick-apply configurations */}
             <div className="space-y-2">
-              <Label htmlFor="settings-style">Caption Style</Label>
+              <Label className="flex items-center gap-1.5">
+                <Sparkles className="h-3.5 w-3.5 text-emerald-600" />
+                Presets
+              </Label>
+              <div className="grid grid-cols-2 gap-1.5">
+                {CAPTION_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => {
+                      setCaptionStyle(preset.captionStyle);
+                      if (preset.captionTemplate) {
+                        setCaptionTemplate(preset.captionTemplate);
+                      }
+                      if (preset.suggestedDescription && !description.trim()) {
+                        setDescription(preset.suggestedDescription);
+                      }
+                    }}
+                    className="text-left rounded-md border p-2 hover:border-emerald-400 hover:bg-emerald-50/30 dark:hover:bg-emerald-950/20 transition-colors"
+                    title={preset.description}
+                  >
+                    <p className="text-xs font-medium truncate">{preset.name}</p>
+                    <p className="text-[10px] text-muted-foreground line-clamp-2 mt-0.5">
+                      {preset.description}
+                    </p>
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                Click a preset to apply its style, template, and suggested description. You can still edit everything after.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="settings-style">Estilo de caption</Label>
               <Select value={captionStyle} onValueChange={(v) => setCaptionStyle(v as CaptionStyle)}>
                 <SelectTrigger id="settings-style">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="natural">Natural Language</SelectItem>
-                  <SelectItem value="tags">Tag-based (Comma Separated)</SelectItem>
-                  <SelectItem value="custom">Custom Template</SelectItem>
+                  <SelectItem value="natural">Lenguaje natural</SelectItem>
+                  <SelectItem value="tags">Tags (separados por comas)</SelectItem>
+                  <SelectItem value="custom">Plantilla personalizada</SelectItem>
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                {captionStyle === 'natural' && 'Captions will be natural language descriptions (40-80 words).'}
-                {captionStyle === 'tags' && 'Captions will be comma-separated tags.'}
-                {captionStyle === 'custom' && 'Use a custom template with placeholders like {trigger}, {description}, {colors}.'}
+                {captionStyle === 'natural' && 'Los captions serán descripciones en lenguaje natural (40-80 palabras).'}
+                {captionStyle === 'tags' && 'Los captions serán tags separados por comas.'}
+                {captionStyle === 'custom' && 'Usa una plantilla personalizada con placeholders como {trigger}, {description}, {colors}.'}
               </p>
             </div>
 
             {captionStyle === 'custom' && (
               <div className="space-y-2">
-                <Label htmlFor="settings-template">Custom Template</Label>
+                <Label htmlFor="settings-template">Plantilla personalizada</Label>
                 <Textarea
                   id="settings-template"
                   value={captionTemplate}
@@ -291,6 +331,40 @@ export function DatasetSettingsDialog({ open, onOpenChange }: DatasetSettingsDia
                 </p>
               </div>
             )}
+
+            {/* Advanced: custom system prompt override */}
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => setShowAdvancedPrompt(!showAdvancedPrompt)}
+                className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <Server className="h-3.5 w-3.5" />
+                Advanced: Custom system prompt
+                {systemPromptOverride.trim() && (
+                  <Badge variant="outline" className="text-[8px] h-3.5 px-1 border-amber-300 text-amber-600 bg-amber-50">
+                    active
+                  </Badge>
+                )}
+              </button>
+              {showAdvancedPrompt && (
+                <div className="space-y-2">
+                  <Textarea
+                    value={systemPromptOverride}
+                    onChange={(e) => setSystemPromptOverride(e.target.value)}
+                    rows={6}
+                    placeholder="Leave empty to use the built-in prompt. When set, this replaces the entire system prompt sent to the LLM for caption generation (ZAI provider only)."
+                    className="font-mono text-xs"
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Override the built-in system prompt for full control. Only
+                    applies to the ZAI provider. The user prompt (VLM analysis,
+                    colors, notes) is still appended automatically. Leave empty
+                    to use the default.
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -298,7 +372,7 @@ export function DatasetSettingsDialog({ open, onOpenChange }: DatasetSettingsDia
         {activeTab === 'provider' && (
           <div className="space-y-4 py-2">
             <div className="space-y-2">
-              <Label>Provider</Label>
+              <Label>Proveedor</Label>
               <Select value={llmProvider} onValueChange={(v) => handleProviderChange(v as LLMProvider)}>
                 <SelectTrigger>
                   <SelectValue />
@@ -463,11 +537,11 @@ export function DatasetSettingsDialog({ open, onOpenChange }: DatasetSettingsDia
             onClick={handleDelete}
             disabled={deleteDataset.isPending}
           >
-            Delete Dataset
+            Eliminar dataset
           </Button>
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
+              Cancelar
             </Button>
             <Button
               onClick={handleSave}
@@ -475,7 +549,7 @@ export function DatasetSettingsDialog({ open, onOpenChange }: DatasetSettingsDia
               className="bg-emerald-600 hover:bg-emerald-700 text-white"
             >
               {updateDataset.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Save Changes
+              Guardar cambios
             </Button>
           </div>
         </DialogFooter>

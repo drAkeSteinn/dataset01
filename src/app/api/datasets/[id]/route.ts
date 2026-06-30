@@ -63,6 +63,7 @@ export async function PUT(
       'llmProvider',
       'llmModel',
       'llmEndpoint',
+      'systemPromptOverride',
     ] as const;
 
     const updates: Record<string, string> = {};

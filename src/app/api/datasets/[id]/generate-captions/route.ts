@@ -7,8 +7,8 @@ import {
   saveCaption,
   updateImageMetadata,
   encodeImageId,
-  markAllForRegeneration,
   clearRegenerationPending,
+  clearAllRegenerationPending,
   clearAllSelectedForRegen,
 } from '@/lib/file-storage';
 
@@ -43,13 +43,15 @@ export async function POST(
     });
   }
 
-  // Parse optional body for regenerate flag and selectedOnly flag
+  // Parse optional body for regenerate flag, selectedOnly flag, and retryFailed flag
   let regenerate = false;
   let selectedOnly = false;
+  let retryFailed = false;
   try {
     const body = await request.json();
     regenerate = !!body.regenerate;
     selectedOnly = !!body.selectedOnly;
+    retryFailed = !!body.retryFailed;
   } catch {
     // No body or invalid JSON, defaults
   }
@@ -58,8 +60,32 @@ export async function POST(
   const allImages = listImages(id);
   let imagesToProcess;
 
-  if (selectedOnly && regenerate) {
-    // Regenerate only selected images
+  if (retryFailed) {
+    // Retry only images whose status is 'error' (failed in a previous run).
+    // This does NOT mark all for regeneration — it only retries the failures.
+    clearAllRegenerationPending(id);
+    imagesToProcess = allImages.filter((img) => img.status === 'error');
+    if (imagesToProcess.length === 0) {
+      return new Response(
+        JSON.stringify({
+          error: 'No failed images to retry.',
+        }),
+        {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+    }
+    for (const img of imagesToProcess) {
+      updateImageMetadata(id, img.filename, { regenerationPending: true });
+    }
+  } else if (selectedOnly && regenerate) {
+    // Regenerate only selected images.
+    // First clear ALL pending flags so stale flags from a previous interrupted
+    // run don't leak into this one (which would leave the "Resume X" indicator
+    // stuck on images that were never part of this selection).
+    clearAllRegenerationPending(id);
+
     imagesToProcess = allImages.filter((img) => img.selectedForRegen);
 
     if (imagesToProcess.length === 0) {
@@ -74,18 +100,37 @@ export async function POST(
       );
     }
 
-    // Mark only these images for regeneration (for resume capability)
+    // Mark only the selected images for regeneration (for resume capability)
     for (const img of imagesToProcess) {
       updateImageMetadata(id, img.filename, { regenerationPending: true });
     }
   } else if (regenerate) {
-    // Mark all images for regeneration (only sets flag for images not already pending)
-    // This enables resume: if interrupted, next call picks up where it left off
-    const pendingCount = markAllForRegeneration(id);
+    // "Regenerate All" button behavior:
+    //   1. If there are images WITHOUT a caption (pending) → only process those.
+    //      This lets the user finish a partially-captioned dataset without
+    //      re-running already-completed images.
+    //   2. If every image already has a caption (none pending) → process ALL
+    //      images (true "regenerate everything").
+    //
+    // First, clear stale pending flags so the "Resume X" indicator stays
+    // accurate, then decide based on which images lack a caption.
+    clearAllRegenerationPending(id);
 
-    // Get fresh list with updated flags
-    const updatedImages = listImages(id);
-    imagesToProcess = updatedImages.filter((img) => img.regenerationPending);
+    const withoutCaption = allImages.filter((img) => !img.caption);
+
+    if (withoutCaption.length > 0) {
+      // Resume/finish mode: only process images that still lack a caption.
+      imagesToProcess = withoutCaption;
+      for (const img of imagesToProcess) {
+        updateImageMetadata(id, img.filename, { regenerationPending: true });
+      }
+    } else {
+      // True regenerate-all: every image already has a caption. Process all
+      // of them directly (we don't rely on regenerationPending here because
+      // listImages forces that flag to false when a caption exists, which is
+      // correct for the UI but would hide these images from the filter).
+      imagesToProcess = allImages;
+    }
 
     if (imagesToProcess.length === 0) {
       return new Response(
@@ -186,10 +231,11 @@ export async function POST(
             vlmAnalysis: image.vlmAnalysis,
             colorInfo: image.colorInfo,
             imageDescription: image.imageDescription,
-            triggerWord: dataset.triggerWord,
+            triggerWord: image.triggerWordOverride || dataset.triggerWord,
             captionStyle: dataset.captionStyle,
             captionTemplate: dataset.captionTemplate,
             description: dataset.description,
+            systemPromptOverride: dataset.systemPromptOverride,
             model: dataset.llmModel,
             endpoint: dataset.llmEndpoint,
           });
@@ -236,10 +282,11 @@ export async function POST(
                 vlmAnalysis: image.vlmAnalysis,
                 colorInfo: image.colorInfo,
                 imageDescription: image.imageDescription,
-                triggerWord: dataset.triggerWord,
+                triggerWord: image.triggerWordOverride || dataset.triggerWord,
                 captionStyle: dataset.captionStyle,
                 captionTemplate: dataset.captionTemplate,
                 description: dataset.description,
+            systemPromptOverride: dataset.systemPromptOverride,
                 model: dataset.llmModel,
                 endpoint: dataset.llmEndpoint,
               });

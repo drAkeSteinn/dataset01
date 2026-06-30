@@ -22,6 +22,7 @@ export interface Dataset {
   llmProvider: LLMProvider;
   llmModel: string;
   llmEndpoint: string;
+  systemPromptOverride: string;
   createdAt: string;
   updatedAt: string;
   stats?: DatasetStats;
@@ -40,6 +41,7 @@ export interface DatasetImage {
   errorMessage: string;
   regenerationPending: boolean;
   selectedForRegen: boolean;
+  triggerWordOverride: string;
   width: number;
   height: number;
   fileSize: number;
@@ -96,6 +98,7 @@ export interface CreateDatasetInput {
   llmProvider?: LLMProvider;
   llmModel?: string;
   llmEndpoint?: string;
+  systemPromptOverride?: string;
 }
 
 export interface UpdateDatasetInput {
@@ -108,6 +111,7 @@ export interface UpdateDatasetInput {
   llmProvider?: LLMProvider;
   llmModel?: string;
   llmEndpoint?: string;
+  systemPromptOverride?: string;
 }
 
 export interface ColorInfo {

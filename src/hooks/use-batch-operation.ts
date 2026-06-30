@@ -23,7 +23,7 @@ export function useBatchOperation() {
     async (
       datasetId: string,
       type: 'analyze' | 'generate-captions' | 'regenerate',
-      options?: { selectedOnly?: boolean }
+      options?: { selectedOnly?: boolean; retryFailed?: boolean }
     ) => {
       // Cancel any existing operation
       if (abortControllerRef.current) {
@@ -44,6 +44,9 @@ export function useBatchOperation() {
         body = { regenerate: true };
         if (options?.selectedOnly) {
           body.selectedOnly = true;
+        }
+        if (options?.retryFailed) {
+          body.retryFailed = true;
         }
       }
 
@@ -150,6 +153,12 @@ export function useBatchOperation() {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
+    // Mark as paused so the UI can show a "paused" message. The backend keeps
+    // the regenerationPending flags for unprocessed images, so "Resume" works.
+    useAppStore.getState().updateBatchProgress({
+      ...useAppStore.getState().batchOperation.progress,
+      message: 'Paused — click Resume to continue',
+    });
     finishBatchOperation();
   }, [finishBatchOperation]);
 

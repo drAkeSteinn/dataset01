@@ -62,6 +62,64 @@ export async function extractDominantColor(
 }
 
 /**
+ * Extract a palette of the most representative colors from an image.
+ *
+ * Downscales the image to a small grid, quantizes each pixel to a bucket, and
+ * returns the top `maxColors` buckets by frequency as hex strings (with a
+ * named description). This complements `extractDominantColor` (which only
+ * returns the single average color) so the UI and caption prompts can show a
+ * richer color picture.
+ */
+export async function extractColorPalette(
+  imgPath: string,
+  maxColors = 6
+): Promise<string[]> {
+  const image = sharp(imgPath);
+  const { data, info } = await image
+    .resize(32, 32, { fit: 'cover' })
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const channels = info.channels >= 3 ? 3 : 1;
+  // Quantize: round each channel to nearest 32 (0,32,64,...,224) so similar
+  // colors collapse into the same bucket.
+  const quant = (v: number) => Math.round(v / 32) * 32;
+  const bucketCount = new Map<string, { r: number; g: number; b: number; n: number }>();
+
+  for (let i = 0; i < data.length; i += channels) {
+    const r = channels === 1 ? data[i] : data[i];
+    const g = channels === 1 ? data[i] : data[i + 1];
+    const b = channels === 1 ? data[i] : data[i + 2];
+    const qr = quant(r);
+    const qg = quant(g);
+    const qb = quant(b);
+    const key = `${qr},${qg},${qb}`;
+    const entry = bucketCount.get(key);
+    if (entry) {
+      entry.n++;
+    } else {
+      bucketCount.set(key, { r: qr, g: qg, b: qb, n: 1 });
+    }
+  }
+
+  // Sort by frequency descending and take the top maxColors.
+  const top = [...bucketCount.values()]
+    .sort((a, b) => b.n - a.n)
+    .slice(0, maxColors)
+    .map((c) => rgbToHex(c.r, c.g, c.b));
+
+  return top;
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  const toHex = (v: number) =>
+    Math.max(0, Math.min(255, Math.round(v)))
+      .toString(16)
+      .padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+/**
  * Get basic metadata for an image file.
  */
 export async function getImageMetadata(

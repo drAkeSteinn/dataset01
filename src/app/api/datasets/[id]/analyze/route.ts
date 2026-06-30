@@ -3,6 +3,7 @@ import { getZAI } from '@/lib/zai';
 import {
   cropHead,
   extractDominantColor,
+  extractColorPalette,
   getImageMetadata,
 } from '@/lib/image-utils';
 import {
@@ -103,11 +104,17 @@ export async function POST(
             }
           }
 
-          // Extract dominant color
+          // Extract dominant color + full palette
           let colorInfo = '';
           try {
             const color = await extractDominantColor(image.originalPath);
-            colorInfo = JSON.stringify(color);
+            let palette: string[] = [];
+            try {
+              palette = await extractColorPalette(image.originalPath, 6);
+            } catch {
+              // palette is optional — dominant color alone is still useful
+            }
+            colorInfo = JSON.stringify({ ...color, palette });
             updateImageMetadata(id, image.filename, { colorInfo });
           } catch (err) {
             console.error(

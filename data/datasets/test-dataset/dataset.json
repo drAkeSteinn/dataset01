@@ -8,5 +8,6 @@
   "llmModel": "",
   "llmEndpoint": "",
   "createdAt": "2026-06-27T12:05:02.809Z",
-  "updatedAt": "2026-06-28T00:14:09.947Z"
+  "updatedAt": "2026-06-29T12:48:04.839Z",
+  "systemPromptOverride": ""
 }

@@ -22,6 +22,8 @@ export interface CaptionParams {
   description: string;
   model: string;
   endpoint: string;
+  /** Optional custom system prompt that overrides the built-in one. */
+  systemPromptOverride?: string;
 }
 
 export interface LLMProvider {
@@ -378,7 +380,10 @@ const zaiProvider: LLMProvider = {
       description,
     };
 
-    const systemPrompt = buildSystemPrompt(settings);
+    // Use the dataset's custom system prompt if provided, otherwise the built-in.
+    const systemPrompt = params.systemPromptOverride?.trim()
+      ? params.systemPromptOverride
+      : buildSystemPrompt(settings);
     const userPrompt = buildUserPrompt(vlmAnalysis, colorInfo, imageDescription);
 
     log('[ZAI] Sending caption generation request', {
@@ -386,6 +391,7 @@ const zaiProvider: LLMProvider = {
       userPromptLength: userPrompt.length,
       hasDescription: !!description,
       hasImageDescription: !!imageDescription,
+      usingCustomPrompt: !!params.systemPromptOverride?.trim(),
     });
 
     const zai = await getZAI();

@@ -61,6 +61,13 @@ export async function PUT(
       });
     }
 
+    // Update per-image trigger word override if provided
+    if (typeof body.triggerWordOverride === 'string') {
+      updateImageMetadata(datasetId, filename, {
+        triggerWordOverride: body.triggerWordOverride,
+      });
+    }
+
     // Re-read the updated image to return fresh state
     const updated = getImage(datasetId, filename);
 

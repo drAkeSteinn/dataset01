@@ -13,6 +13,7 @@ import { ImageDetailPanel } from '@/components/image-detail-panel';
 import { TagsPanel } from '@/components/tags-panel';
 import { BatchOperationsBar } from '@/components/batch-operations-bar';
 import { ProgressOverlay } from '@/components/progress-overlay';
+import { Lightbox } from '@/components/lightbox';
 import { useAppStore } from '@/stores/app-store';
 import { useDatasets } from '@/hooks/use-datasets';
 import { cn } from '@/lib/utils';
@@ -58,7 +59,7 @@ export function AppShell() {
                   onClick={() => setCenterView('gallery')}
                 >
                   <Images className="h-4 w-4" />
-                  Gallery
+                  Galería
                 </button>
                 <button
                   className={cn(
@@ -92,6 +93,9 @@ export function AppShell() {
 
       {/* Progress overlay for batch operations */}
       <ProgressOverlay />
+
+      {/* Full-size image viewer */}
+      <Lightbox />
     </div>
   );
 }

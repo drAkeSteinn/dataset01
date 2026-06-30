@@ -12,6 +12,7 @@ interface GalleryImageCardProps {
   image: DatasetImage;
   isSelected: boolean;
   onSelect: () => void;
+  onOpenLightbox?: () => void;
   onToggleSelect: (selected: boolean) => void;
 }
 
@@ -38,7 +39,7 @@ const statusConfig: Record<ImageStatus, { label: string; className: string }> = 
   },
 };
 
-export function GalleryImageCard({ image, isSelected, onSelect, onToggleSelect }: GalleryImageCardProps) {
+export function GalleryImageCard({ image, isSelected, onSelect, onOpenLightbox, onToggleSelect }: GalleryImageCardProps) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -73,6 +74,18 @@ export function GalleryImageCard({ image, isSelected, onSelect, onToggleSelect }
   return (
     <div
       onClick={onSelect}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        onOpenLightbox?.();
+      }}
+      title="Click to select · Double-click to view full size"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
       className={cn(
         'group relative overflow-hidden rounded-lg border-2 transition-all duration-150 cursor-pointer',
         'focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500',
@@ -99,7 +112,7 @@ export function GalleryImageCard({ image, isSelected, onSelect, onToggleSelect }
         )}
         {error && (
           <div className="flex h-full items-center justify-center">
-            <span className="text-xs text-muted-foreground">Failed to load</span>
+            <span className="text-xs text-muted-foreground">Error al cargar</span>
           </div>
         )}
         {!loaded && !error && (
@@ -141,7 +154,7 @@ export function GalleryImageCard({ image, isSelected, onSelect, onToggleSelect }
           !confirmDelete && 'opacity-0 group-hover:opacity-100',
           image.selectedForRegen && 'opacity-100'
         )}
-        title={image.selectedForRegen ? 'Selected for regeneration' : 'Select for regeneration'}
+        title={image.selectedForRegen ? 'Seleccionada para regeneración' : 'Seleccionar para regeneración'}
       >
         <CheckCircle2 className="h-3.5 w-3.5" />
       </button>
@@ -154,7 +167,7 @@ export function GalleryImageCard({ image, isSelected, onSelect, onToggleSelect }
           className="absolute top-9 left-1.5 h-6 w-6 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
           onClick={handleDeleteClick}
           disabled={deleteImage.isPending}
-          title="Delete image"
+          title="Eliminar imagen"
         >
           <Trash2 className="h-3 w-3" />
         </Button>
@@ -168,10 +181,10 @@ export function GalleryImageCard({ image, isSelected, onSelect, onToggleSelect }
         >
           <AlertTriangle className="h-6 w-6 text-red-300" />
           <p className="text-[10px] text-white text-center font-medium">
-            Delete this image?
+            ¿Eliminar esta imagen?
           </p>
           <p className="text-[9px] text-red-200 text-center">
-            .png and .txt will be removed
+            .png y .txt serán eliminados
           </p>
           <div className="flex gap-1.5 mt-1">
             <Button
@@ -184,7 +197,7 @@ export function GalleryImageCard({ image, isSelected, onSelect, onToggleSelect }
               {deleteImage.isPending ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
               ) : (
-                'Delete'
+                'Eliminar'
               )}
             </Button>
             <Button
